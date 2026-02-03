@@ -1,0 +1,51 @@
+name = "openclaw-agents"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers for Platforms dispatch namespace
+# [dispatch_namespace]
+# binding = "AGENT_DISPATCH"
+# namespace = "openclaw-agents"
+
+# R2 bucket for agent outputs (thumbnails, media, exports)
+[[r2_buckets]]
+binding = "AGENT_STORAGE"
+bucket_name = "openclaw-agent-storage"
+
+# D1 database (shared with backend)
+[[d1_databases]]
+binding = "DB"
+database_name = "openclaw-db"
+database_id = "" # Set after database creation
+
+# AI Gateway
+# [ai]
+# binding = "AI_GATEWAY"
+
+# Environment variables (secrets set via wrangler secret)
+# OPENAI_API_KEY
+# ANTHROPIC_API_KEY
+# GOOGLE_AI_API_KEY
+# YOUTUBE_API_KEY
+# INSTAGRAM_ACCESS_TOKEN
+
+[vars]
+ENVIRONMENT = "development"
+
+# Development overrides
+[env.dev]
+name = "openclaw-agents-dev"
+
+[env.dev.vars]
+ENVIRONMENT = "development"
+
+# Production overrides
+[env.production]
+name = "openclaw-agents"
+routes = [
+  { pattern = "agents.openclaw.kr/*", zone_name = "openclaw.kr" }
+]
+
+[env.production.vars]
+ENVIRONMENT = "production"

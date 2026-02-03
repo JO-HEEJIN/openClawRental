@@ -1,0 +1,59 @@
+graph TB
+    subgraph Client["Client Layer"]
+        NEXT["Next.js 14 SSR/SSG<br/>Tailwind + shadcn/ui"]
+        PORTONE_SDK["PortOne V2 JS SDK<br/>IMP.request_pay()"]
+        DASHBOARD["Creator Dashboard SPA<br/>Usage, Credits, Agent Status"]
+    end
+
+    subgraph Edge["Edge Gateway Layer (Cloudflare Workers)"]
+        AUTH["Auth Middleware<br/>Clerk + Kakao OAuth"]
+        RATE["Rate Limiter<br/>Per-user, per-endpoint"]
+        ROUTER["Hono API Router<br/>Request validation"]
+    end
+
+    subgraph Compute["Compute Layer"]
+        WFP["Workers for Platforms<br/>Multi-tenant dispatch"]
+        SANDBOX["Sandbox Runtime<br/>Per-user agent isolation"]
+        TOOLS["Tool Orchestrator<br/>YouTube API, Image Gen, SEO"]
+    end
+
+    subgraph Storage["Storage Layer"]
+        D1["Cloudflare D1<br/>Users, Transactions, Configs"]
+        R2["Cloudflare R2<br/>Thumbnails, Media, Exports"]
+        DO["Durable Objects<br/>Credit Balance per Tenant"]
+    end
+
+    subgraph AI["AI Layer"]
+        AIGW["AI Gateway<br/>Cache, Rate Limit, Fallback"]
+        LLM["LLM Providers<br/>OpenAI, Claude, Gemini"]
+    end
+
+    subgraph External["External Services"]
+        PORTONE_API["PortOne V2 REST API<br/>Payment verification"]
+        NICE["NICE Payments PG<br/>Card, Bank, KakaoPay, NaverPay, TossPay"]
+        YOUTUBE["YouTube Data API<br/>Upload, Analytics"]
+        INSTA["Instagram Graph API<br/>Reels upload"]
+        KAKAO["Kakao OAuth<br/>Korean social login"]
+    end
+
+    NEXT --> AUTH
+    PORTONE_SDK -->|"imp_uid callback"| NEXT
+    PORTONE_SDK -->|"redirect"| NICE
+    DASHBOARD --> AUTH
+    AUTH --> RATE --> ROUTER
+
+    ROUTER -->|"POST /api/credits/verify"| PORTONE_API
+    ROUTER --> WFP
+    WFP --> SANDBOX
+    SANDBOX --> TOOLS
+    TOOLS --> AIGW --> LLM
+
+    ROUTER --> D1
+    ROUTER --> DO
+    SANDBOX --> R2
+    TOOLS --> YOUTUBE
+    TOOLS --> INSTA
+
+    PORTONE_API --> NICE
+    NICE -->|"webhook"| ROUTER
+    KAKAO --> AUTH

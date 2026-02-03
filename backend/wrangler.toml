@@ -1,0 +1,33 @@
+name = "openclaw-backend"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 8787
+
+[[d1_databases]]
+binding = "DB"
+database_name = "openclaw-db"
+database_id = "placeholder-replace-with-actual-id"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "openclaw-media"
+
+[[queues.producers]]
+binding = "USAGE_QUEUE"
+queue = "openclaw-usage-logs"
+
+[[queues.consumers]]
+queue = "openclaw-usage-logs"
+max_batch_size = 50
+max_batch_timeout = 30
+
+[vars]
+ENVIRONMENT = "development"
+CORS_ORIGINS = "http://localhost:3000,https://openclaw.kr"
+RATE_LIMIT_MAX = "100"
+RATE_LIMIT_WINDOW_SECONDS = "60"
+PAYMENT_RATE_LIMIT_MAX = "10"
+PAYMENT_RATE_LIMIT_WINDOW_SECONDS = "3600"

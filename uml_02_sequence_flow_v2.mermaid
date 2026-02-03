@@ -1,0 +1,96 @@
+sequenceDiagram
+    actor User as Creator (Browser)
+    participant FE as Next.js Frontend
+    participant SDK as PortOne V2 JS SDK
+    participant NICE as NICE Payments PG
+    participant BE as Cloudflare Workers API
+    participant PORTONE as PortOne V2 REST API
+    participant D1 as D1 Database
+    participant DO as Durable Object (Credit)
+
+    Note over User, DO: === Phase 1: Authentication (Kakao OAuth) ===
+    User->>FE: Click "Login with Kakao"
+    FE->>BE: GET /auth/kakao
+    BE-->>User: Redirect to Kakao OAuth
+    User->>BE: Kakao callback with auth code
+    BE->>D1: Create/update USER record
+    BE-->>FE: Set session cookie + JWT
+    FE-->>User: Dashboard loaded
+
+    Note over User, DO: === Phase 2: Credit Purchase (Card Payment) ===
+    User->>FE: Select "Starter" package (9,900 KRW)
+    FE->>BE: POST /api/credits/prepare {package: "starter"}
+    BE->>D1: Create PAYMENT_ORDER (status: pending, merchant_uid: gen)
+    BE-->>FE: {merchant_uid, amount: 9900, storeId}
+    FE->>SDK: IMP.request_pay({merchant_uid, amount: 9900, pay_method: "card", ...})
+    SDK->>NICE: Open payment checkout UI
+    NICE-->>User: Card authentication screen
+    User->>NICE: Enter card info + authenticate
+    NICE-->>SDK: Payment completed
+    SDK-->>FE: Callback {imp_uid, merchant_uid, status: "paid"}
+    FE->>BE: POST /api/credits/verify {imp_uid, merchant_uid}
+    BE->>PORTONE: GET /payments/{imp_uid} (server-side verification)
+    PORTONE-->>BE: {status: "paid", amount: 9900, pay_method: "card"}
+    Note over BE: CRITICAL: Verify amount === 9900 and status === "paid"
+    BE->>D1: BEGIN TRANSACTION
+    BE->>D1: Update PAYMENT_ORDER (status: verified, imp_uid)
+    BE->>D1: Insert CREDIT_TRANSACTION (+1100 credits)
+    BE->>DO: Update credit balance (+1100)
+    BE->>D1: COMMIT
+    BE-->>FE: {success: true, credits: 1100, balance: 1200}
+    FE-->>User: "1,100 credits added!"
+
+    Note over User, DO: === Phase 2b: Virtual Account (Async) ===
+    User->>FE: Select "Pro" package, pay_method: "vbank"
+    FE->>SDK: IMP.request_pay({pay_method: "vbank", amount: 29900, ...})
+    SDK->>NICE: Request virtual account
+    NICE-->>SDK: Virtual account issued
+    SDK-->>FE: {imp_uid, vbank_num, vbank_date, status: "ready"}
+    FE->>BE: POST /api/credits/verify {imp_uid}
+    BE->>PORTONE: GET /payments/{imp_uid}
+    PORTONE-->>BE: {status: "ready", vbank_num, vbank_date}
+    BE->>D1: Update PAYMENT_ORDER (status: awaiting_deposit, vbank info)
+    BE-->>FE: {status: "awaiting_deposit", vbank_num, deadline}
+    FE-->>User: "Transfer 29,900 KRW to account by deadline"
+    Note over User: User deposits money via bank app
+    NICE->>PORTONE: Deposit confirmed
+    PORTONE->>BE: POST /api/webhooks/portone {imp_uid, status: "paid"}
+    Note over BE: Check WEBHOOK_EVENTS for idempotency (imp_uid + event_type)
+    BE->>PORTONE: GET /payments/{imp_uid} (re-verify)
+    PORTONE-->>BE: {status: "paid", amount: 29900}
+    BE->>D1: BEGIN TRANSACTION
+    BE->>D1: Insert WEBHOOK_EVENT (idempotency key)
+    BE->>D1: Update PAYMENT_ORDER (status: verified)
+    BE->>D1: Insert CREDIT_TRANSACTION (+3500 credits)
+    BE->>DO: Update credit balance (+3500)
+    BE->>D1: COMMIT
+    BE-->>FE: WebSocket push "credits_granted"
+    FE-->>User: "3,500 credits added!"
+
+    Note over User, DO: === Phase 3: Agent Execution ===
+    User->>FE: Configure and start "Shorts Trend Agent"
+    FE->>BE: POST /api/agents/runs {agent_id, config}
+    BE->>DO: Reserve 50 credits (estimated cost)
+    DO-->>BE: {reserved: true, available: 1150}
+    BE->>D1: Insert AGENT_RUN (status: running, reserved: 50)
+    BE->>BE: Dispatch to Workers for Platforms
+    BE->>BE: Sandbox executes agent (trend research, script gen, thumbnail)
+    BE->>D1: Insert USAGE_LOG entries (LLM tokens, API calls)
+    Note over BE: Actual cost: 38 credits (12 credits refunded)
+    BE->>DO: Settle reservation (actual: 38, refund: 12)
+    BE->>D1: Update AGENT_RUN (status: completed, cost: 38)
+    BE-->>FE: WebSocket push {run_id, status: "completed", outputs: [...]}
+    FE-->>User: "Agent completed! 3 scripts + thumbnails ready for review"
+
+    Note over User, DO: === Phase 4: Refund Flow ===
+    User->>FE: Request refund for unused credits
+    FE->>BE: POST /api/credits/refund {reason}
+    BE->>BE: Admin review required
+    Note over BE: Admin approves refund
+    BE->>PORTONE: POST /payments/{imp_uid}/cancel {amount: partial}
+    PORTONE->>NICE: Process refund
+    NICE-->>PORTONE: Refund confirmed
+    PORTONE-->>BE: {status: "cancelled", cancel_amount}
+    BE->>D1: Insert CREDIT_TRANSACTION (negative)
+    BE->>DO: Deduct credit balance
+    BE-->>FE: "Refund processed. 7-10 business days for card refund."

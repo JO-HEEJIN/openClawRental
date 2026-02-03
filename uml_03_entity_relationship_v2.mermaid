@@ -1,0 +1,126 @@
+erDiagram
+    USER {
+        text id PK "ULID"
+        text clerk_id UK "Clerk user ID"
+        text kakao_id UK "Kakao OAuth ID (nullable)"
+        text email UK "User email"
+        text display_name "Korean display name"
+        text role "user | admin"
+        text locale "ko-KR default"
+        text timezone "Asia/Seoul default"
+        integer is_active "1 = active"
+        text created_at "ISO 8601"
+        text updated_at "ISO 8601"
+    }
+
+    CREDIT_BALANCE {
+        text user_id PK_FK "References USER.id"
+        integer total_credits "Lifetime credits purchased"
+        integer used_credits "Credits consumed by agent runs"
+        integer reserved_credits "Credits held for running agents"
+        integer available_credits "total - used - reserved"
+        text updated_at "ISO 8601"
+    }
+
+    PAYMENT_ORDER {
+        text id PK "ULID"
+        text user_id FK "References USER.id"
+        text merchant_uid UK "Our unique order ID"
+        text imp_uid UK "PortOne transaction ID (nullable until payment)"
+        text package_code "trial | starter | pro | business"
+        integer amount_krw "Payment amount in KRW (VAT inclusive)"
+        integer credits_to_grant "Credits to add on verification"
+        text pay_method "card | bank | kakaopay | naverpay | tosspay | vbank"
+        text status "pending | awaiting_deposit | verified | failed | refunded"
+        text vbank_num "Virtual account number (nullable)"
+        text vbank_date "Virtual account deadline (nullable)"
+        text pg_provider "nicepay"
+        text verified_at "Server-side verification timestamp"
+        text created_at "ISO 8601"
+        text updated_at "ISO 8601"
+    }
+
+    CREDIT_TRANSACTION {
+        text id PK "ULID"
+        text user_id FK "References USER.id"
+        text payment_order_id FK "References PAYMENT_ORDER.id (nullable for usage deductions)"
+        text agent_run_id FK "References AGENT_RUN.id (nullable for purchases)"
+        text type "purchase | usage | reservation | settlement | refund | bonus | trial"
+        integer amount "Positive for credits in, negative for credits out"
+        integer balance_after "Credit balance after this transaction"
+        text description "Human-readable description"
+        text created_at "ISO 8601"
+    }
+
+    WEBHOOK_EVENT {
+        text id PK "ULID"
+        text idempotency_key UK "imp_uid + event_type composite"
+        text imp_uid "PortOne transaction ID"
+        text event_type "payment.paid | payment.failed | payment.cancelled"
+        text payload_json "Raw webhook payload (encrypted at rest)"
+        text processed_at "When we processed this event"
+        text created_at "ISO 8601"
+    }
+
+    AGENT_CONFIG {
+        text id PK "ULID"
+        text user_id FK "References USER.id"
+        text agent_template_id "Platform agent template"
+        text name "User-facing agent name"
+        text description "What this agent does"
+        text config_json "Agent parameters (channel, style, schedule)"
+        text status "active | paused | deleted"
+        integer estimated_credits_per_run "Cost estimate"
+        text created_at "ISO 8601"
+        text updated_at "ISO 8601"
+    }
+
+    AGENT_RUN {
+        text id PK "ULID"
+        text agent_config_id FK "References AGENT_CONFIG.id"
+        text user_id FK "References USER.id"
+        text status "queued | running | completed | failed | cancelled"
+        integer credits_reserved "Credits held at start"
+        integer credits_actual "Actual cost after completion"
+        text input_json "Run input parameters"
+        text output_json "Run results (scripts, thumbnails, etc.)"
+        text error_message "Error details if failed"
+        integer duration_ms "Execution time"
+        text started_at "ISO 8601"
+        text completed_at "ISO 8601"
+        text created_at "ISO 8601"
+    }
+
+    USAGE_LOG {
+        text id PK "ULID"
+        text agent_run_id FK "References AGENT_RUN.id"
+        text user_id FK "References USER.id"
+        text resource_type "llm_tokens | api_call | compute_ms | storage_bytes"
+        text resource_detail "Model name, API endpoint, etc."
+        integer quantity "Token count, ms, bytes, etc."
+        integer credit_cost "Credits consumed for this resource"
+        text created_at "ISO 8601"
+    }
+
+    CONSENT_RECORD {
+        text id PK "ULID"
+        text user_id FK "References USER.id"
+        text consent_type "terms | privacy | marketing | data_processing"
+        text consent_version "Version of the agreement"
+        integer granted "1 = granted, 0 = revoked"
+        text ip_address "IP at time of consent"
+        text user_agent "Browser at time of consent"
+        text created_at "ISO 8601"
+    }
+
+    USER ||--|| CREDIT_BALANCE : "has"
+    USER ||--o{ PAYMENT_ORDER : "creates"
+    USER ||--o{ CREDIT_TRANSACTION : "has"
+    USER ||--o{ AGENT_CONFIG : "configures"
+    USER ||--o{ AGENT_RUN : "triggers"
+    USER ||--o{ CONSENT_RECORD : "grants"
+    PAYMENT_ORDER ||--o{ CREDIT_TRANSACTION : "generates"
+    PAYMENT_ORDER ||--o| WEBHOOK_EVENT : "confirmed by"
+    AGENT_CONFIG ||--o{ AGENT_RUN : "executes"
+    AGENT_RUN ||--o{ USAGE_LOG : "produces"
+    AGENT_RUN ||--o{ CREDIT_TRANSACTION : "settles"
