@@ -2,14 +2,7 @@ import type { Env } from "../types";
 import { CreditBalanceModel } from "../models/credit-balance";
 import { CreditTransactionModel } from "../models/credit-transaction";
 import { AppError } from "../middleware/error-handler";
-
-/**
- * Get the Durable Object stub for a user's credit balance.
- */
-function getCreditDO(env: Env, userId: string): DurableObjectStub {
-  const doId = env.CREDIT_BALANCE.idFromName(userId);
-  return env.CREDIT_BALANCE.get(doId);
-}
+import { generateId } from "../utils/ulid";
 
 export interface CreditBalanceInfo {
   totalCredits: number;
@@ -19,48 +12,27 @@ export interface CreditBalanceInfo {
 }
 
 /**
- * Get the current credit balance from the Durable Object.
- * Falls back to D1 if DO is not initialized.
+ * Get the current credit balance from D1.
  */
-export async function getBalance(env: Env, userId: string): Promise<CreditBalanceInfo> {
-  const stub = getCreditDO(env, userId);
-  const res = await stub.fetch(new Request("http://do/balance"));
-  const data = await res.json<CreditBalanceInfo>();
-
-  // If DO returns zeros, check D1 and initialize DO if needed
-  if (data.totalCredits === 0 && data.usedCredits === 0) {
-    const d1Balance = await CreditBalanceModel.findByUserId(env.DB, userId);
-    if (d1Balance && d1Balance.total_credits > 0) {
-      // Initialize DO from D1
-      await stub.fetch(
-        new Request("http://do/initialize", {
-          method: "POST",
-          body: JSON.stringify({
-            userId,
-            totalCredits: d1Balance.total_credits,
-            usedCredits: d1Balance.used_credits,
-            reservedCredits: d1Balance.reserved_credits,
-          }),
-        })
-      );
-      return {
-        totalCredits: d1Balance.total_credits,
-        usedCredits: d1Balance.used_credits,
-        reservedCredits: d1Balance.reserved_credits,
-        availableCredits: d1Balance.available_credits,
-      };
-    }
+export async function getBalance(db: D1Database, userId: string): Promise<CreditBalanceInfo> {
+  const balance = await CreditBalanceModel.findByUserId(db, userId);
+  if (!balance) {
+    return { totalCredits: 0, usedCredits: 0, reservedCredits: 0, availableCredits: 0 };
   }
-
-  return data;
+  return {
+    totalCredits: balance.total_credits,
+    usedCredits: balance.used_credits,
+    reservedCredits: balance.reserved_credits,
+    availableCredits: balance.available_credits,
+  };
 }
 
 /**
  * Grant credits to a user (after payment verification or admin grant).
- * Updates both DO (immediate) and D1 (durable).
+ * Uses D1 batch transaction for atomicity.
  */
 export async function grantCredits(
-  env: Env,
+  db: D1Database,
   userId: string,
   amount: number,
   opts: {
@@ -73,42 +45,34 @@ export async function grantCredits(
     throw new AppError(400, "INVALID_AMOUNT", "Amount must be positive");
   }
 
-  // Update DO
-  const stub = getCreditDO(env, userId);
-  const doRes = await stub.fetch(
-    new Request("http://do/grant", {
-      method: "POST",
-      body: JSON.stringify({ amount }),
-    })
-  );
-  const doData = await doRes.json<{ success: boolean; availableCredits: number }>();
+  const txId = generateId();
+  const now = new Date().toISOString();
 
-  // Update D1
-  await CreditBalanceModel.grantCredits(env.DB, userId, amount);
+  // D1 batch transaction: update balance + record transaction atomically
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE credit_balance SET total_credits = total_credits + ?, updated_at = ? WHERE user_id = ?`
+      )
+      .bind(amount, now, userId),
+    db
+      .prepare(
+        `INSERT INTO credit_transaction (id, user_id, payment_order_id, type, amount, balance_after, description, created_at)
+         VALUES (?, ?, ?, ?, ?, (SELECT (total_credits - used_credits - reserved_credits) FROM credit_balance WHERE user_id = ?), ?, ?)`
+      )
+      .bind(txId, userId, opts.paymentOrderId ?? null, opts.type, amount, userId, opts.description, now),
+  ]);
 
-  // Get updated balance for transaction record
-  const balance = await CreditBalanceModel.findByUserId(env.DB, userId);
-  const balanceAfter = balance?.available_credits ?? doData.availableCredits;
-
-  // Record transaction
-  await CreditTransactionModel.create(env.DB, {
-    userId,
-    paymentOrderId: opts.paymentOrderId,
-    type: opts.type,
-    amount: amount,
-    balanceAfter,
-    description: opts.description,
-  });
-
-  return getBalance(env, userId);
+  return getBalance(db, userId);
 }
 
 /**
  * Reserve credits before an agent run.
- * Deducts from available, adds to reserved.
+ * Uses D1 batch transaction -- the UPDATE will only succeed if available_credits >= amount
+ * due to the CHECK constraint on credit_balance.
  */
 export async function reserveCredits(
-  env: Env,
+  db: D1Database,
   userId: string,
   amount: number,
   agentRunId: string
@@ -117,66 +81,109 @@ export async function reserveCredits(
     throw new AppError(400, "INVALID_AMOUNT", "Amount must be positive");
   }
 
-  // Reserve in DO (source of truth for active operations)
-  const stub = getCreditDO(env, userId);
-  const res = await stub.fetch(
-    new Request("http://do/reserve", {
-      method: "POST",
-      body: JSON.stringify({ amount }),
-    })
-  );
+  const txId = generateId();
+  const now = new Date().toISOString();
 
-  if (!res.ok) {
-    const err = await res.json<{ error: string }>();
-    throw new AppError(402, "INSUFFICIENT_CREDITS", err.error ?? "Insufficient credits");
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE credit_balance SET reserved_credits = reserved_credits + ?, updated_at = ?
+         WHERE user_id = ? AND (total_credits - used_credits - reserved_credits) >= ?`
+      )
+      .bind(amount, now, userId, amount),
+    db
+      .prepare(
+        `INSERT INTO credit_transaction (id, user_id, agent_run_id, type, amount, balance_after, description, created_at)
+         VALUES (?, ?, ?, 'reservation', ?, (SELECT (total_credits - used_credits - reserved_credits) FROM credit_balance WHERE user_id = ?), ?, ?)`
+      )
+      .bind(txId, userId, agentRunId, -amount, userId, `Credit reservation for agent run ${agentRunId}`, now),
+  ]);
+
+  // Check if the UPDATE actually modified a row
+  if (results[0] && results[0].meta.changes === 0) {
+    throw new AppError(402, "INSUFFICIENT_CREDITS", "Insufficient credits for this operation");
+  }
+}
+
+/**
+ * Refund credits to a user (payment refund or admin action).
+ * Reduces used_credits and records a refund transaction.
+ * Uses D1 batch transaction for atomicity.
+ */
+export async function refundCredits(
+  db: D1Database,
+  userId: string,
+  amount: number,
+  opts: {
+    paymentOrderId?: string;
+    description: string;
+  }
+): Promise<CreditBalanceInfo> {
+  if (amount <= 0) {
+    throw new AppError(400, "INVALID_AMOUNT", "Amount must be positive");
   }
 
-  // Reserve in D1
-  await CreditBalanceModel.reserveCredits(env.DB, userId, amount);
+  const txId = generateId();
+  const now = new Date().toISOString();
 
-  // Record reservation transaction
-  const balance = await CreditBalanceModel.findByUserId(env.DB, userId);
-  await CreditTransactionModel.create(env.DB, {
-    userId,
-    agentRunId,
-    type: "reservation",
-    amount: -amount,
-    balanceAfter: balance?.available_credits ?? 0,
-    description: `Credit reservation for agent run ${agentRunId}`,
-  });
+  // Reduce total_credits (refund removes the granted credits)
+  // Use MAX(0, ...) to prevent going negative
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE credit_balance SET total_credits = MAX(0, total_credits - ?), updated_at = ? WHERE user_id = ?`
+      )
+      .bind(amount, now, userId),
+    db
+      .prepare(
+        `INSERT INTO credit_transaction (id, user_id, payment_order_id, type, amount, balance_after, description, created_at)
+         VALUES (?, ?, ?, 'refund', ?, (SELECT (total_credits - used_credits - reserved_credits) FROM credit_balance WHERE user_id = ?), ?, ?)`
+      )
+      .bind(txId, userId, opts.paymentOrderId ?? null, -amount, userId, opts.description, now),
+  ]);
+
+  return getBalance(db, userId);
 }
 
 /**
  * Settle credits after an agent run completes.
  * Moves from reserved to used (actual cost), returns excess to available.
+ * Uses D1 batch transaction for atomicity.
  */
 export async function settleCredits(
-  env: Env,
+  db: D1Database,
   userId: string,
   reservedAmount: number,
   actualAmount: number,
   agentRunId: string
 ): Promise<void> {
-  // Settle in DO
-  const stub = getCreditDO(env, userId);
-  await stub.fetch(
-    new Request("http://do/settle", {
-      method: "POST",
-      body: JSON.stringify({ reservedAmount, actualAmount }),
-    })
-  );
+  const txId = generateId();
+  const now = new Date().toISOString();
+  const refundAmount = reservedAmount - actualAmount;
 
-  // Settle in D1
-  await CreditBalanceModel.settleCredits(env.DB, userId, reservedAmount, actualAmount);
-
-  // Record settlement transaction
-  const balance = await CreditBalanceModel.findByUserId(env.DB, userId);
-  await CreditTransactionModel.create(env.DB, {
-    userId,
-    agentRunId,
-    type: "settlement",
-    amount: reservedAmount - actualAmount, // positive if excess returned
-    balanceAfter: balance?.available_credits ?? 0,
-    description: `Settlement for agent run ${agentRunId}: reserved=${reservedAmount}, actual=${actualAmount}`,
-  });
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE credit_balance
+         SET reserved_credits = reserved_credits - ?,
+             used_credits = used_credits + ?,
+             updated_at = ?
+         WHERE user_id = ?`
+      )
+      .bind(reservedAmount, actualAmount, now, userId),
+    db
+      .prepare(
+        `INSERT INTO credit_transaction (id, user_id, agent_run_id, type, amount, balance_after, description, created_at)
+         VALUES (?, ?, ?, 'settlement', ?, (SELECT (total_credits - used_credits - reserved_credits) FROM credit_balance WHERE user_id = ?), ?, ?)`
+      )
+      .bind(
+        txId,
+        userId,
+        agentRunId,
+        refundAmount,
+        userId,
+        `Settlement for agent run ${agentRunId}: reserved=${reservedAmount}, actual=${actualAmount}`,
+        now
+      ),
+  ]);
 }

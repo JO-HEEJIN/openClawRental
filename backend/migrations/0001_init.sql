@@ -1,13 +1,14 @@
 -- OpenClaw D1 Schema Migration: Initial setup (9 entities)
 -- Database: Cloudflare D1 (SQLite)
+-- Architecture: D1 transactions for concurrency (no Durable Objects)
 
 -- 1. USER
 CREATE TABLE IF NOT EXISTS user (
   id TEXT PRIMARY KEY,                           -- ULID
-  clerk_id TEXT NOT NULL UNIQUE,                 -- Clerk user ID
-  kakao_id TEXT UNIQUE,                          -- Kakao account ID
-  email TEXT NOT NULL UNIQUE,
+  kakao_id TEXT NOT NULL UNIQUE,                 -- Kakao account ID
+  email TEXT UNIQUE,
   display_name TEXT NOT NULL DEFAULT '',
+  profile_image_url TEXT,
   role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
   locale TEXT NOT NULL DEFAULT 'ko-KR',
   timezone TEXT NOT NULL DEFAULT 'Asia/Seoul',
@@ -16,10 +17,11 @@ CREATE TABLE IF NOT EXISTS user (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_user_clerk_id ON user(clerk_id);
+CREATE INDEX idx_user_kakao_id ON user(kakao_id);
 CREATE INDEX idx_user_email ON user(email);
 
 -- 2. CREDIT_BALANCE
+-- Concurrency controlled via D1 batch transactions (no Durable Objects)
 CREATE TABLE IF NOT EXISTS credit_balance (
   user_id TEXT PRIMARY KEY REFERENCES user(id) ON DELETE CASCADE,
   total_credits INTEGER NOT NULL DEFAULT 0,
@@ -129,8 +131,8 @@ CREATE TABLE IF NOT EXISTS usage_log (
   id TEXT PRIMARY KEY,                           -- ULID
   agent_run_id TEXT NOT NULL REFERENCES agent_run(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-  resource_type TEXT NOT NULL,                   -- e.g. 'llm_call', 'image_gen', 'tts'
-  resource_detail TEXT NOT NULL DEFAULT '',       -- e.g. 'gpt-4o', 'dall-e-3'
+  resource_type TEXT NOT NULL,                   -- e.g. 'llm_tokens', 'api_call', 'compute_ms'
+  resource_detail TEXT NOT NULL DEFAULT '',       -- e.g. 'gpt-4o', 'youtube-data-api'
   quantity INTEGER NOT NULL DEFAULT 1,
   credit_cost INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))

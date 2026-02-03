@@ -14,7 +14,7 @@ const credits = new Hono<{ Bindings: Env; Variables: { user: AuthUser } }>();
 // GET /credits/balance - Get current credit balance
 credits.get("/balance", async (c) => {
   const user = c.get("user");
-  const balance = await getBalance(c.env, user.userId);
+  const balance = await getBalance(c.env.DB, user.userId);
   return c.json({ success: true, data: balance });
 });
 
@@ -45,7 +45,7 @@ credits.post("/prepare", async (c) => {
     }
 
     // Grant trial credits immediately (no payment needed)
-    await grantCredits(c.env, user.userId, pkg.totalCredits, {
+    await grantCredits(c.env.DB, user.userId, pkg.totalCredits, {
       type: "trial",
       description: "Trial credit package",
     });
@@ -132,7 +132,7 @@ credits.post("/verify", async (c) => {
   const bonusCredits = pkg?.bonusCredits ?? 0;
 
   // Grant base credits as purchase
-  await grantCredits(c.env, user.userId, baseCredits, {
+  await grantCredits(c.env.DB, user.userId, baseCredits, {
     paymentOrderId: order.id,
     type: "purchase",
     description: `${pkg?.nameKo ?? order.package_code} package purchase`,
@@ -140,14 +140,14 @@ credits.post("/verify", async (c) => {
 
   // Grant bonus credits separately if any
   if (bonusCredits > 0) {
-    await grantCredits(c.env, user.userId, bonusCredits, {
+    await grantCredits(c.env.DB, user.userId, bonusCredits, {
       paymentOrderId: order.id,
       type: "bonus",
       description: `${pkg?.nameKo ?? order.package_code} package bonus`,
     });
   }
 
-  const balance = await getBalance(c.env, user.userId);
+  const balance = await getBalance(c.env.DB, user.userId);
 
   return c.json({
     success: true,

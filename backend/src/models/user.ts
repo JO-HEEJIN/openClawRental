@@ -2,10 +2,10 @@ import { generateId } from "../utils/ulid";
 
 export interface UserRow {
   id: string;
-  clerk_id: string;
-  kakao_id: string | null;
-  email: string;
+  kakao_id: string;
+  email: string | null;
   display_name: string;
+  profile_image_url: string | null;
   role: "user" | "admin";
   locale: string;
   timezone: string;
@@ -19,8 +19,8 @@ export const UserModel = {
     return db.prepare("SELECT * FROM user WHERE id = ?").bind(id).first<UserRow>();
   },
 
-  async findByClerkId(db: D1Database, clerkId: string): Promise<UserRow | null> {
-    return db.prepare("SELECT * FROM user WHERE clerk_id = ?").bind(clerkId).first<UserRow>();
+  async findByKakaoId(db: D1Database, kakaoId: string): Promise<UserRow | null> {
+    return db.prepare("SELECT * FROM user WHERE kakao_id = ?").bind(kakaoId).first<UserRow>();
   },
 
   async findByEmail(db: D1Database, email: string): Promise<UserRow | null> {
@@ -29,16 +29,16 @@ export const UserModel = {
 
   async create(
     db: D1Database,
-    data: { clerkId: string; kakaoId?: string; email: string; displayName: string }
+    data: { kakaoId: string; email?: string | null; displayName: string; profileImageUrl?: string | null }
   ): Promise<UserRow> {
     const id = generateId();
     const now = new Date().toISOString();
     await db
       .prepare(
-        `INSERT INTO user (id, clerk_id, kakao_id, email, display_name, created_at, updated_at)
+        `INSERT INTO user (id, kakao_id, email, display_name, profile_image_url, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(id, data.clerkId, data.kakaoId ?? null, data.email, data.displayName, now, now)
+      .bind(id, data.kakaoId, data.email ?? null, data.displayName, data.profileImageUrl ?? null, now, now)
       .run();
 
     return (await UserModel.findById(db, id))!;
@@ -47,7 +47,7 @@ export const UserModel = {
   async update(
     db: D1Database,
     id: string,
-    data: Partial<{ displayName: string; kakaoId: string; isActive: boolean }>
+    data: Partial<{ displayName: string; email: string; profileImageUrl: string; isActive: boolean }>
   ): Promise<void> {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -55,9 +55,13 @@ export const UserModel = {
       sets.push("display_name = ?");
       values.push(data.displayName);
     }
-    if (data.kakaoId !== undefined) {
-      sets.push("kakao_id = ?");
-      values.push(data.kakaoId);
+    if (data.email !== undefined) {
+      sets.push("email = ?");
+      values.push(data.email);
+    }
+    if (data.profileImageUrl !== undefined) {
+      sets.push("profile_image_url = ?");
+      values.push(data.profileImageUrl);
     }
     if (data.isActive !== undefined) {
       sets.push("is_active = ?");

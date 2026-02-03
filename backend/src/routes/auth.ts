@@ -5,50 +5,61 @@ import { UserModel } from "../models/user";
 import { CreditBalanceModel } from "../models/credit-balance";
 import { ConsentRecordModel } from "../models/consent-record";
 import { AppError } from "../middleware/error-handler";
+import {
+  getKakaoAuthUrl,
+  exchangeKakaoCode,
+  getKakaoUserInfo,
+  findOrCreateUser,
+} from "../services/auth";
 
 const auth = new Hono<{ Bindings: Env; Variables: { user: AuthUser } }>();
 
-// GET /auth/kakao - Redirect to Kakao OAuth via Clerk
-// Clerk handles Kakao OAuth as a social connection provider.
-// The frontend initiates this via Clerk's SDK, so this endpoint
-// provides the Clerk OAuth URL for the frontend to redirect to.
+// GET /auth/kakao - Redirect to Kakao OAuth authorization
 auth.get("/kakao", async (c) => {
-  const publishableKey = c.env.CLERK_PUBLISHABLE_KEY;
-  // Extract Clerk frontend API domain from publishable key
-  // Format: pk_test_xxx or pk_live_xxx
-  // The frontend should use Clerk's signIn.authenticateWithRedirect() instead
-  // This endpoint is provided as a convenience for direct linking
-  return c.json({
-    success: true,
-    data: {
-      provider: "oauth_kakao",
-      message: "Use Clerk SDK signIn.authenticateWithRedirect({ strategy: 'oauth_kakao' }) on the frontend",
-    },
-  });
+  const url = getKakaoAuthUrl(c.env);
+  return c.redirect(url);
 });
 
 // GET /auth/kakao/callback - Handle Kakao OAuth callback
-// Clerk handles the actual callback. This endpoint is called by the frontend
-// after Clerk processes the OAuth callback and issues a session token.
 auth.get("/kakao/callback", async (c) => {
-  // Clerk manages the OAuth flow. After Clerk processes the callback,
-  // the frontend gets a session token automatically.
-  // This endpoint is a no-op since Clerk handles it.
+  const code = c.req.query("code");
+  const error = c.req.query("error");
+
+  if (error) {
+    throw new AppError(400, "OAUTH_ERROR", `Kakao OAuth error: ${c.req.query("error_description") ?? error}`);
+  }
+
+  if (!code) {
+    throw new AppError(400, "MISSING_CODE", "Authorization code is required");
+  }
+
+  // Exchange code for token
+  const tokenResponse = await exchangeKakaoCode(c.env, code);
+
+  // Fetch user info from Kakao
+  const kakaoUser = await getKakaoUserInfo(tokenResponse.access_token);
+
+  // Find or create user in D1 (with trial credits for new users)
+  const { user, token, isNewUser } = await findOrCreateUser(c.env.DB, c.env, kakaoUser);
+
   return c.json({
     success: true,
     data: {
-      message: "Clerk handles OAuth callback. Frontend receives session token automatically.",
+      token,
+      user: {
+        id: user.userId,
+        displayName: user.displayName,
+        email: user.email,
+        role: user.role,
+      },
+      isNewUser,
     },
   });
 });
 
-// POST /auth/logout - Logout (invalidate session on client side)
-// Clerk sessions are managed client-side; the backend just acknowledges.
+// POST /auth/logout - Logout
+// JWT sessions are stateless; the frontend should discard the token.
 auth.post("/logout", authMiddleware(), async (c) => {
-  // Clerk JWT sessions are stateless. The frontend should:
-  // 1. Call clerk.signOut()
-  // 2. Clear the session token
-  // Backend has no session state to invalidate.
   return c.json({
     success: true,
     data: { message: "Logged out successfully" },
@@ -81,6 +92,7 @@ auth.get("/me", authMiddleware(), async (c) => {
         id: userRow.id,
         email: userRow.email,
         displayName: userRow.display_name,
+        profileImageUrl: userRow.profile_image_url,
         role: userRow.role,
         locale: userRow.locale,
         timezone: userRow.timezone,
@@ -128,6 +140,27 @@ auth.post("/consent", authMiddleware(), async (c) => {
   return c.json({
     success: true,
     data: { message: "Consent recorded" },
+  });
+});
+
+// POST /auth/profile - Update user profile
+auth.post("/profile", authMiddleware(), async (c) => {
+  const authUser = c.get("user");
+  const body = await c.req.json<{
+    displayName?: string;
+  }>();
+
+  if (!body.displayName) {
+    throw new AppError(400, "BAD_REQUEST", "displayName is required");
+  }
+
+  await UserModel.update(c.env.DB, authUser.userId, {
+    displayName: body.displayName,
+  });
+
+  return c.json({
+    success: true,
+    data: { message: "Profile updated" },
   });
 });
 

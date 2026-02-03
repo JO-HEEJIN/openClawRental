@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Bot, Coins, LayoutDashboard, Settings } from "lucide-react";
+import { Bot, Coins, LayoutDashboard, PlayCircle, Settings } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
   { href: "/dashboard/agents", label: "AI 에이전트", icon: Bot },
+  { href: "/dashboard/runs", label: "실행 내역", icon: PlayCircle },
   { href: "/dashboard/credits", label: "크레딧", icon: Coins },
   { href: "/dashboard/settings", label: "설정", icon: Settings },
 ];

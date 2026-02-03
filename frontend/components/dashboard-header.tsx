@@ -1,33 +1,37 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Bot, Coins, LayoutDashboard, Menu, Settings, LogOut } from "lucide-react";
+import { Bell, Bot, Coins, LayoutDashboard, Menu, PlayCircle, Settings } from "lucide-react";
+import { api } from "@/lib/api";
+import { formatNumber } from "@/lib/format";
+import type { CreditBalance } from "@/types";
 
 const navItems = [
   { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
   { href: "/dashboard/agents", label: "AI 에이전트", icon: Bot },
+  { href: "/dashboard/runs", label: "실행 내역", icon: PlayCircle },
   { href: "/dashboard/credits", label: "크레딧", icon: Coins },
   { href: "/dashboard/settings", label: "설정", icon: Settings },
 ];
 
 export function DashboardHeader() {
   const pathname = usePathname();
+  const [credits, setCredits] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.get<CreditBalance>("/credits/balance").then((res) => {
+      if (res.success && res.data) setCredits(res.data.availableCredits);
+    });
+  }, [pathname]);
 
   return (
     <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b bg-background px-4 md:px-6">
-      {/* Mobile menu */}
       <Sheet>
         <SheetTrigger asChild>
           <Button variant="ghost" size="icon" className="md:hidden">
@@ -69,7 +73,6 @@ export function DashboardHeader() {
         </SheetContent>
       </Sheet>
 
-      {/* Page title area (mobile shows logo) */}
       <div className="md:hidden">
         <Link href="/" className="flex items-center gap-2">
           <Bot className="h-6 w-6 text-primary" />
@@ -78,29 +81,30 @@ export function DashboardHeader() {
       </div>
       <div className="hidden md:block" />
 
-      {/* User menu */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="relative h-9 w-9 rounded-full">
-            <Avatar className="h-9 w-9">
-              <AvatarFallback>U</AvatarFallback>
-            </Avatar>
+      <div className="flex items-center gap-3">
+        <Link href="/dashboard/credits">
+          <Button variant="outline" size="sm" className="gap-1.5">
+            <Coins className="h-4 w-4" />
+            <span className="text-sm font-medium">
+              {credits !== null ? formatNumber(credits) : "-"}
+            </span>
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem asChild>
-            <Link href="/dashboard/settings">
-              <Settings className="mr-2 h-4 w-4" />
-              설정
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem>
-            <LogOut className="mr-2 h-4 w-4" />
-            로그아웃
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        </Link>
+
+        <Button variant="ghost" size="icon" className="relative">
+          <Bell className="h-5 w-5" />
+          <span className="sr-only">알림</span>
+        </Button>
+
+        <UserButton
+          afterSignOutUrl="/"
+          appearance={{
+            elements: {
+              avatarBox: "h-9 w-9",
+            },
+          }}
+        />
+      </div>
     </header>
   );
 }

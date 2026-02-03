@@ -1,9 +1,3 @@
-/**
- * Agent registration.
- *
- * Registers all available agents with the global registry.
- */
-
 import { agentRegistry } from '../framework/registry';
 import { TrendResearchAgent } from './trend-research';
 import { ScriptGeneratorAgent } from './script-generator';

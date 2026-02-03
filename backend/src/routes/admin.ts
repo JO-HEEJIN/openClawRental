@@ -177,7 +177,7 @@ admin.post("/credits/grant", async (c) => {
   await CreditBalanceModel.initialize(c.env.DB, body.userId);
 
   // Grant credits
-  const balance = await grantCredits(c.env, body.userId, body.amount, {
+  const balance = await grantCredits(c.env.DB, body.userId, body.amount, {
     type: "bonus",
     description: `Admin grant: ${body.reason}`,
   });

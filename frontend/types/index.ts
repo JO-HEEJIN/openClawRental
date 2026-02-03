@@ -3,7 +3,7 @@
 // ========== User & Auth ==========
 export interface User {
   id: string;
-  clerkId: string;
+  kakaoId: string;
   email: string;
   name: string;
   profileImageUrl?: string;
@@ -29,14 +29,21 @@ export interface CreditPackage {
   popular?: boolean;
 }
 
+export interface CreditBalance {
+  totalCredits: number;
+  usedCredits: number;
+  reservedCredits: number;
+  availableCredits: number;
+}
+
 export interface CreditTransaction {
   id: string;
-  userId: string;
-  type: "purchase" | "usage" | "refund" | "bonus";
-  amount: number; // positive = credit, negative = debit
-  balance: number;
+  type: "purchase" | "usage" | "refund" | "bonus" | "trial";
+  amount: number;
+  balanceAfter: number;
   description: string;
-  relatedId?: string; // payment or run ID
+  paymentOrderId?: string;
+  agentRunId?: string;
   createdAt: string;
 }
 
@@ -53,36 +60,54 @@ export interface PaymentRecord {
 }
 
 // ========== Agents ==========
-export type AgentCategory = "shorts" | "reels" | "tiktok" | "editing" | "thumbnail" | "caption";
+export type AgentCategory = "content" | "visual" | "seo" | "localization";
 
-export interface Agent {
+export interface AgentTemplate {
   id: string;
   name: string;
   nameKo: string;
   description: string;
   descriptionKo: string;
-  category: AgentCategory;
-  creditCost: number;
-  iconUrl?: string;
-  rating: number;
-  totalRuns: number;
-  estimatedDurationMinutes: number;
-  inputSchema: Record<string, unknown>;
-  active: boolean;
+  category: string;
+  estimatedCreditsPerRun: number;
+  configSchema: Record<string, unknown>;
+}
+
+export interface AgentConfig {
+  id: string;
+  agentTemplateId: string;
+  templateName?: string;
+  name: string;
+  description?: string;
+  configJson: Record<string, unknown>;
+  status: "active" | "paused" | "archived";
+  estimatedCreditsPerRun: number;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface AgentRun {
   id: string;
-  userId: string;
-  agentId: string;
-  agent?: Agent;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
-  input: Record<string, unknown>;
-  output?: Record<string, unknown>;
-  creditsUsed: number;
+  agentConfigId: string;
+  config?: AgentConfig;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  creditsReserved: number;
+  creditsActual?: number;
+  inputJson?: Record<string, unknown>;
+  outputJson?: Record<string, unknown>;
+  errorMessage?: string;
+  durationMs?: number;
   startedAt?: string;
   completedAt?: string;
+  createdAt: string;
+}
+
+export interface UsageLog {
+  id: string;
+  resourceType: string;
+  resourceDetail: string;
+  quantity: number;
+  creditCost: number;
   createdAt: string;
 }
 
@@ -102,10 +127,52 @@ export interface ApiResponse<T> {
   };
 }
 
+// ========== Consent & Onboarding ==========
+export interface ConsentData {
+  termsOfService: boolean;
+  privacyPolicy: boolean;
+  marketing: boolean;
+}
+
+export interface OnboardingProfile {
+  contentCategory?: string;
+  primaryPlatform?: string;
+}
+
 // ========== Dashboard ==========
 export interface DashboardStats {
   creditBalance: number;
   totalRuns: number;
   activeRuns: number;
   creditsUsedThisMonth: number;
+  favoriteAgentId?: string;
+  favoriteAgentName?: string;
 }
+
+export interface WeeklyUsage {
+  date: string;
+  credits: number;
+  runs: number;
+}
+
+// ========== PortOne ==========
+export interface PortOnePaymentResponse {
+  imp_uid: string;
+  merchant_uid: string;
+  paid_amount: number;
+  status: string;
+  error_msg?: string;
+  vbank_num?: string;
+  vbank_name?: string;
+  vbank_date?: number;
+}
+
+export type PayMethod =
+  | "card"
+  | "trans"
+  | "kakaopay"
+  | "naverpay"
+  | "tosspay"
+  | "vbank";
+
+export type TransactionFilter = "all" | "purchase" | "usage" | "refund" | "bonus" | "trial";

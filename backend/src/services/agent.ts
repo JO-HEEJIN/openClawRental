@@ -1,5 +1,5 @@
 import type { Env } from "../types";
-import { AgentConfigModel, type AgentConfigRow } from "../models/agent-config";
+import { AgentConfigModel } from "../models/agent-config";
 import { AgentRunModel } from "../models/agent-run";
 import { UsageLogModel } from "../models/usage-log";
 import { reserveCredits, settleCredits } from "./credit";
@@ -135,7 +135,7 @@ export async function startAgentRun(
 
   // Reserve credits (throws if insufficient)
   try {
-    await reserveCredits(env, userId, creditsToReserve, run.id);
+    await reserveCredits(env.DB, userId, creditsToReserve, run.id);
   } catch (err) {
     // If reservation fails, mark run as failed
     await AgentRunModel.updateStatus(env.DB, run.id, {
@@ -182,7 +182,7 @@ export async function cancelAgentRun(
   const actualCreditsUsed = usageLogs.reduce((sum, log) => sum + log.credit_cost, 0);
 
   // Settle: charge for what was used, return the rest
-  await settleCredits(env, userId, run.credits_reserved, actualCreditsUsed, runId);
+  await settleCredits(env.DB, userId, run.credits_reserved, actualCreditsUsed, runId);
 
   // Mark run as cancelled
   await AgentRunModel.updateStatus(env.DB, runId, {
